@@ -1,6 +1,7 @@
 const PASSPHRASES = [
   { phrase: "GordonRamsayShoutsToGetMoreViews$", label: "Costa", namespace: "costa" },
   { phrase: "TestingKitchenLoopTest1", label: "Friend1", namespace: "Friend1" },
+    { phrase: "KitchenLoopTest2", label: "Friend2", namespace: "Friend2" },
 ];
 
 const CORS = {
