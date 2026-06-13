@@ -2,3 +2,7 @@ name = "kitchen-loop-api"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 account_id = "d7641fdb3638e28d8c20e5e8196a4fe9"
+
+[vars]
+GITHUB_REPO = "costa911/the-kitchen-loop"
+GITHUB_FILE = "data.json"
