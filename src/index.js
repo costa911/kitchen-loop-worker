@@ -57,6 +57,11 @@ const DEFAULT_RECIPES = [
   {name:'Burnt Leeks & Cannellini Bean Soup',tags:'Dinner',ingredients:'Bread, Cannellini Beans, Flour, Garlic, Leeks, Milk, Nutritional Yeast, Rosemary, White Wine',notes:'',link:'https://www.instagram.com/reel/CvR14mcqGB5/'},
   {name:'Chilli in a Taco Shell',tags:'Dinner',ingredients:'Bell Peppers, Black Beans, Chilli, Coriander Powder, Cumin, Fresh Tomatoes, Garlic, Kidney Beans, Lime, Onion, Paprika Smokey, Paprika Sweet, Parsley, Rice, Tomato Passata, Tomato Paste, Tortillas',notes:'',link:'https://www.instagram.com/tv/COaKK23NWlB/'},
   {name:'Broccoli & Feta Pie',tags:'Dinner',ingredients:'Broccoli, Feta, Eggs, Kefalyori, Milk, Greek Yogurt, Olive Oil, Flour',notes:'',link:'https://www.instagram.com/reel/DRr5fa3jERQ/'},
+  {name:'Sweetcorn & Tuna Dip',tags:'Lunch',ingredients:'Canned Tuna, Frozen Corn, Mayonnaise, Lemon, Black Peppercorn, Salt',notes:'Serve with crackers',link:''},
+  {name:'Egg & Sardines Dip',tags:'Lunch',ingredients:'Eggs, Canned Sardines, Mayonnaise, Lemon, Black Peppercorn, Salt',notes:'Serve with crackers',link:''},
+  {name:'Tomato Paste & Cucumbers',tags:'Lunch',ingredients:'Kunserva, Cucumber, Olive Oil, Black Peppercorn, Salt',notes:'Serve with crackers',link:''},
+  {name:'Ham & Cheese',tags:'Lunch',ingredients:'Ham, Cheddar, Mustard, Butter',notes:'Serve on bread or crackers',link:''},
+  {name:'Bean Salad',tags:'Lunch',ingredients:'Canned Butter Beans, Canned Kidney Beans, Lettuce, Olive Oil, Lemon, Black Peppercorn, Salt',notes:'',link:''},
 ].map((r, i) => ({ ...r, id: i + 1, cookDates: [] }));
 
 function corsResponse(body, status = 200, extra = {}) {
