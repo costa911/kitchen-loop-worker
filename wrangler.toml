@@ -6,3 +6,7 @@ account_id = "d7641fdb3638e28d8c20e5e8196a4fe9"
 [vars]
 GITHUB_REPO = "costa911/the-kitchen-loop"
 GITHUB_FILE = "data.json"
+
+[[kv_namespaces]]
+binding = "HEARTBEAT_KV"
+id = "9b14518ac9804622adefbba02952b1fa"

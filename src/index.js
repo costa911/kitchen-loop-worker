@@ -74,7 +74,23 @@ function emptyNamespace() {
     planHistory: [],
     shoppingChecked: {},
     lastSeenStockTimestamp: new Date().toISOString(),
+    activity: { loginHistory: [], sessions: [] },
   };
+}
+
+// A session with no heartbeat for this long is considered abandoned — the next heartbeat
+// (or the next admin analytics read) closes it out using its last known ping, not "now",
+// so a tab left open overnight doesn't get credited with a multi-hour session.
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+function finalizeSession(ns, session) {
+  if (!ns.activity) ns.activity = { loginHistory: [], sessions: [] };
+  const durationSeconds = Math.max(0, Math.round((session.lastHeartbeat - session.start) / 1000));
+  ns.activity.sessions.push({
+    start: new Date(session.start).toISOString(),
+    end: new Date(session.lastHeartbeat).toISOString(),
+    durationSeconds,
+  });
 }
 
 export default {
@@ -91,6 +107,16 @@ export default {
         const { phrase } = await request.json();
         const match = PASSPHRASES.find(p => p.phrase === phrase);
         if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
+        try {
+          const { allData, sha } = await readAllData(env);
+          const ns = allData.namespaces[match.namespace] || emptyNamespace();
+          if (!ns.activity) ns.activity = { loginHistory: [], sessions: [] };
+          ns.activity.loginHistory.push(new Date().toISOString());
+          allData.namespaces[match.namespace] = ns;
+          await putFile(env, JSON.stringify(allData), sha);
+        } catch (_) {
+          // Don't fail login just because activity tracking couldn't write.
+        }
         return corsResponse(JSON.stringify({ namespace: match.namespace, label: match.label }));
       } catch (e) {
         return corsResponse(JSON.stringify({ error: 'Invalid request' }), 400);
@@ -153,6 +179,43 @@ export default {
       }
     }
 
+    // Buffers session heartbeats in KV instead of writing data.json on every ping (which
+    // arrives ~every 60s from every active tab). A GitHub commit only happens when a
+    // *previous* session is discovered to have gone idle — so in steady state this costs
+    // one cheap KV write per ping and roughly one GitHub commit per session, not per ping.
+    if (pathname === '/heartbeat' && method === 'PUT') {
+      const passphrase = request.headers.get('X-Passphrase');
+      const match = PASSPHRASES.find(p => p.phrase === passphrase);
+      if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
+      try {
+        const now = Date.now();
+        const kvKey = `session:${match.namespace}`;
+        const existingRaw = await env.HEARTBEAT_KV.get(kvKey);
+        const existing = existingRaw ? JSON.parse(existingRaw) : null;
+
+        if (existing && (now - existing.lastHeartbeat) < IDLE_TIMEOUT_MS) {
+          existing.lastHeartbeat = now;
+          await env.HEARTBEAT_KV.put(kvKey, JSON.stringify(existing));
+          return corsResponse(JSON.stringify({ ok: true }));
+        }
+
+        // No session in KV, or the previous one has been idle 5+ minutes: close out the
+        // stale one (if any) using its last known ping as the end time, then start fresh.
+        if (existing) {
+          const { allData, sha } = await readAllData(env);
+          const ns = allData.namespaces[match.namespace] || emptyNamespace();
+          finalizeSession(ns, existing);
+          allData.namespaces[match.namespace] = ns;
+          await putFile(env, JSON.stringify(allData), sha);
+        }
+
+        await env.HEARTBEAT_KV.put(kvKey, JSON.stringify({ start: now, lastHeartbeat: now }));
+        return corsResponse(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return corsResponse(JSON.stringify({ error: e.message }), 500);
+      }
+    }
+
     if (pathname === '/stock' && method === 'PUT') {
       const passphrase = request.headers.get('X-Passphrase');
       const match = PASSPHRASES.find(p => p.phrase === passphrase);
@@ -182,6 +245,71 @@ export default {
         allData.stockRecipes = stock;
         await putFile(env, JSON.stringify(allData), sha);
         return corsResponse(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return corsResponse(JSON.stringify({ error: e.message }), 500);
+      }
+    }
+
+    if (pathname === '/admin/analytics' && method === 'GET') {
+      const passphrase = request.headers.get('X-Passphrase');
+      const match = PASSPHRASES.find(p => p.phrase === passphrase);
+      if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
+      if (match.namespace !== 'costa') return corsResponse(JSON.stringify({ error: 'Forbidden' }), 403);
+      try {
+        const now = Date.now();
+        const { allData, sha } = await readAllData(env);
+        const liveSessions = {};
+        let dirty = false;
+
+        for (const nsName of Object.keys(allData.namespaces)) {
+          const kvKey = `session:${nsName}`;
+          const raw = await env.HEARTBEAT_KV.get(kvKey);
+          if (!raw) continue;
+          const session = JSON.parse(raw);
+          if (now - session.lastHeartbeat >= IDLE_TIMEOUT_MS) {
+            finalizeSession(allData.namespaces[nsName], session);
+            dirty = true;
+            await env.HEARTBEAT_KV.delete(kvKey);
+          } else {
+            liveSessions[nsName] = session;
+          }
+        }
+
+        if (dirty) await putFile(env, JSON.stringify(allData), sha);
+
+        const analytics = {};
+        for (const [nsName, nsData] of Object.entries(allData.namespaces)) {
+          const activity = nsData.activity || { loginHistory: [], sessions: [] };
+          const sessions = activity.sessions || [];
+          const live = liveSessions[nsName];
+
+          let totalSessionTime = sessions.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
+          let sessionCount = sessions.length;
+          let lastActiveMs = 0;
+          for (const t of activity.loginHistory || []) lastActiveMs = Math.max(lastActiveMs, new Date(t).getTime());
+          for (const s of sessions) lastActiveMs = Math.max(lastActiveMs, new Date(s.end).getTime());
+
+          if (live) {
+            totalSessionTime += Math.max(0, Math.round((live.lastHeartbeat - live.start) / 1000));
+            sessionCount += 1;
+            lastActiveMs = Math.max(lastActiveMs, live.lastHeartbeat);
+          }
+
+          let totalCooksLogged = 0;
+          for (const r of nsData.userRecipes || []) totalCooksLogged += (r.cookDates || []).length;
+          for (const ov of Object.values(nsData.overlays || {})) totalCooksLogged += (ov.cookDates || []).length;
+
+          analytics[nsName] = {
+            totalLogins: (activity.loginHistory || []).length,
+            lastActive: lastActiveMs ? new Date(lastActiveMs).toISOString() : null,
+            totalSessionTime,
+            avgSessionLength: sessionCount ? Math.round(totalSessionTime / sessionCount) : 0,
+            recipesAdded: (nsData.userRecipes || []).length,
+            totalCooksLogged,
+          };
+        }
+
+        return corsResponse(JSON.stringify(analytics));
       } catch (e) {
         return corsResponse(JSON.stringify({ error: e.message }), 500);
       }
