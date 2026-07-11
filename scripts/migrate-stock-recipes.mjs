@@ -41,7 +41,6 @@ const stockRecipes = input.costa.recipes
     pairsWith: r.pairsWith || '',
     isStock: true,
     addedDate: MIGRATION_TS,
-    socialLink: null,
   }));
 
 const stockIdByOldId = new Map(stockRecipes.map((s) => [Number(s.id.split('-')[1]), s.id]));
