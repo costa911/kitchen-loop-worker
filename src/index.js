@@ -67,8 +67,12 @@ async function putFile(env, content, sha) {
 }
 
 // GitHub wraps base64 content at 60 chars and may include \r, \n, or spaces — strip all first.
+// putFile encodes with btoa(unescape(encodeURIComponent(content))) to handle non-ASCII
+// (e.g. the em dash in lunch names) safely; decoding must reverse the exact same steps
+// (decodeURIComponent(escape(...))) or every read-modify-write cycle re-mangles any
+// multi-byte character further, compounding in size each time it's written back.
 function parseFileContent(b64) {
-  return JSON.parse(atob(b64.replace(/\s/g, '')));
+  return JSON.parse(decodeURIComponent(escape(atob(b64.replace(/\s/g, '')))));
 }
 
 // Read data.json and return { allData, sha }.
