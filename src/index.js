@@ -17,29 +17,41 @@ function corsResponse(body, status = 200, extra = {}) {
   });
 }
 
+function githubHeaders(env) {
+  return {
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'kitchen-loop-worker',
+  };
+}
+
 async function getFile(env) {
   const url = `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${env.GITHUB_FILE}`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'kitchen-loop-worker',
-    },
-  });
+  const res = await fetch(url, { headers: githubHeaders(env) });
   if (!res.ok) throw new Error(`GitHub GET failed: ${res.status}`);
-  return res.json(); // { content, sha, ... }
+  const file = await res.json(); // { content, encoding, sha, size, ... }
+
+  // The Contents API only inlines file content up to 1MB; past that it returns
+  // encoding: "none" with an empty content field. data.json has grown past that
+  // limit, so fall back to the Git Blobs API (good up to 100MB) using the same sha.
+  if (file.encoding === 'base64' && file.content) return file;
+
+  const blobUrl = `https://api.github.com/repos/${env.GITHUB_REPO}/git/blobs/${file.sha}`;
+  const blobRes = await fetch(blobUrl, { headers: githubHeaders(env) });
+  if (!blobRes.ok) throw new Error(`GitHub blob GET failed: ${blobRes.status}`);
+  const blob = await blobRes.json(); // { content, encoding, sha, size }
+  return { ...file, content: blob.content, encoding: blob.encoding };
 }
+
+// Thrown when GitHub rejects a PUT because `sha` is stale — another write landed first.
+// Distinct from other failures so callers can choose to retry against fresh state.
+class GitHubConflictError extends Error {}
 
 async function putFile(env, content, sha) {
   const url = `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${env.GITHUB_FILE}`;
   const res = await fetch(url, {
     method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'kitchen-loop-worker',
-      'Content-Type': 'application/json',
-    },
+    headers: { ...githubHeaders(env), 'Content-Type': 'application/json' },
     body: JSON.stringify({
       message: 'chore: sync data.json via kitchen-loop-api',
       content: btoa(unescape(encodeURIComponent(content))),
@@ -48,6 +60,7 @@ async function putFile(env, content, sha) {
   });
   if (!res.ok) {
     const err = await res.text();
+    if (res.status === 409) throw new GitHubConflictError(`GitHub PUT conflict: ${err}`);
     throw new Error(`GitHub PUT failed: ${res.status} ${err}`);
   }
   return res.json();
@@ -64,6 +77,23 @@ async function readAllData(env) {
   const file = await getFile(env);
   const allData = parseFileContent(file.content);
   return { allData, sha: file.sha };
+}
+
+// Read-modify-write with retry: two requests (e.g. two logins, or a login racing a
+// heartbeat finalize) can both read the same sha, and GitHub only accepts the first PUT —
+// the second gets a 409 and, unretried, silently loses whatever it appended in memory.
+// Re-reading and re-applying `mutate` against the latest state avoids that lost update.
+async function writeWithRetry(env, mutate, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    const { allData, sha } = await readAllData(env);
+    mutate(allData);
+    try {
+      await putFile(env, JSON.stringify(allData), sha);
+      return allData;
+    } catch (e) {
+      if (!(e instanceof GitHubConflictError) || i === attempts - 1) throw e;
+    }
+  }
 }
 
 function emptyNamespace() {
@@ -108,12 +138,12 @@ export default {
         const match = PASSPHRASES.find(p => p.phrase === phrase);
         if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
         try {
-          const { allData, sha } = await readAllData(env);
-          const ns = allData.namespaces[match.namespace] || emptyNamespace();
-          if (!ns.activity) ns.activity = { loginHistory: [], sessions: [] };
-          ns.activity.loginHistory.push(new Date().toISOString());
-          allData.namespaces[match.namespace] = ns;
-          await putFile(env, JSON.stringify(allData), sha);
+          await writeWithRetry(env, (allData) => {
+            const ns = allData.namespaces[match.namespace] || emptyNamespace();
+            if (!ns.activity) ns.activity = { loginHistory: [], sessions: [] };
+            ns.activity.loginHistory.push(new Date().toISOString());
+            allData.namespaces[match.namespace] = ns;
+          });
         } catch (_) {
           // Don't fail login just because activity tracking couldn't write.
         }
