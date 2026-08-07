@@ -251,6 +251,25 @@ export default {
       }
     }
 
+    if (pathname === '/link-click' && method === 'PUT') {
+      const passphrase = request.headers.get('X-Passphrase');
+      const match = PASSPHRASES.find(p => p.phrase === passphrase);
+      if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
+      try {
+        const { recipeId, recipeName, link } = await request.json();
+        await writeWithRetry(env, (allData) => {
+          const ns = allData.namespaces[match.namespace] || emptyNamespace();
+          if (!ns.activity) ns.activity = { loginHistory: [], sessions: [] };
+          if (!ns.activity.linkClicks) ns.activity.linkClicks = [];
+          ns.activity.linkClicks.push({ recipeId, recipeName, link, timestamp: new Date().toISOString() });
+          allData.namespaces[match.namespace] = ns;
+        });
+        return corsResponse(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return corsResponse(JSON.stringify({ error: e.message }), 500);
+      }
+    }
+
     if (pathname === '/stock' && method === 'PUT') {
       const passphrase = request.headers.get('X-Passphrase');
       const match = PASSPHRASES.find(p => p.phrase === passphrase);
@@ -341,6 +360,8 @@ export default {
             avgSessionLength: sessionCount ? Math.round(totalSessionTime / sessionCount) : 0,
             recipesAdded: (nsData.userRecipes || []).length,
             totalCooksLogged,
+            linkClicks: (activity.linkClicks || []).length,
+            linkClickDetail: activity.linkClicks || [],
           };
         }
 
