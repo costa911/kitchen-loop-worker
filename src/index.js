@@ -3,6 +3,8 @@ const PASSPHRASES = [
   { phrase: "TestingKitchenLoopTest1", label: "Friend1", namespace: "Wife" },
     { phrase: "KitchenLoopTest2", label: "Friend2", namespace: "Rach" },
     { phrase: "MaxlikesPoo!", label: "Friend3", namespace: "Flanka" },
+    { phrase: "ZimbabweIsMyH0me", label: "Friend4", namespace: "Hattie" },
+    { phrase: "NFT4L|f3", label: "Friend5", namespace: "Gord" }
 ];
 
 const CORS = {
