@@ -5,6 +5,8 @@ const PASSPHRASES = [
     { phrase: "MaxlikesPoo!", label: "Friend3", namespace: "Flanka" },
     { phrase: "ZimbabweIsMyH0me", label: "Friend4", namespace: "Hattie" },
     { phrase: "NFT4L|f3", label: "Friend5", namespace: "Gord" }
+    { phrase: "TheBrowLine", label: "Friend5", namespace: "Emmy" }
+    { phrase: "GhostWriter", label: "Friend5", namespace: "Evtim" }
 ];
 
 const CORS = {
