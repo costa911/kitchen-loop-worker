@@ -114,6 +114,7 @@ function emptyNamespace() {
     shoppingChecked: {},
     customList: emptyCustomList(),
     lastSeenStockTimestamp: new Date().toISOString(),
+    lastSeenChangelogVersion: 0,
     activity: { loginHistory: [], sessions: [] },
   };
 }
@@ -200,6 +201,9 @@ export default {
           shoppingChecked: ns.shoppingChecked || {},
           customList: ns.customList || emptyCustomList(),
           lastSeenStockTimestamp: ns.lastSeenStockTimestamp || null,
+          // Missing (predates the field) defaults to 0, same as a brand-new namespace —
+          // at this rollout the backlog is exactly the 2 entries everyone should see once.
+          lastSeenChangelogVersion: typeof ns.lastSeenChangelogVersion === 'number' ? ns.lastSeenChangelogVersion : 0,
         }));
       } catch (e) {
         return corsResponse(JSON.stringify({ error: e.message }), 500);
@@ -298,6 +302,29 @@ export default {
         const { allData, sha } = await readAllData(env);
         const ns = allData.namespaces[match.namespace] || emptyNamespace();
         ns.customList = emptyCustomList();
+        allData.namespaces[match.namespace] = ns;
+
+        await putFile(env, JSON.stringify(allData), sha);
+        return corsResponse(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return corsResponse(JSON.stringify({ error: e.message }), 500);
+      }
+    }
+
+    if (pathname === '/changelog-seen' && method === 'PUT') {
+      const passphrase = request.headers.get('X-Passphrase');
+      const match = PASSPHRASES.find(p => p.phrase === passphrase);
+      if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
+      try {
+        const { version } = JSON.parse(await request.text());
+        if (!Number.isInteger(version)) {
+          return corsResponse(JSON.stringify({ error: 'Expected integer version' }), 400);
+        }
+        const { allData, sha } = await readAllData(env);
+        const ns = allData.namespaces[match.namespace] || emptyNamespace();
+        // Max, not overwrite — an out-of-order request (e.g. a stale tab) should never
+        // walk lastSeenChangelogVersion backwards and resurrect an already-dismissed popup.
+        ns.lastSeenChangelogVersion = Math.max(ns.lastSeenChangelogVersion || 0, version);
         allData.namespaces[match.namespace] = ns;
 
         await putFile(env, JSON.stringify(allData), sha);
