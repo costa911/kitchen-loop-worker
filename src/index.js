@@ -112,9 +112,24 @@ function emptyNamespace() {
     plan: [],
     planHistory: [],
     shoppingChecked: {},
+    customList: emptyCustomList(),
     lastSeenStockTimestamp: new Date().toISOString(),
     activity: { loginHistory: [], sessions: [] },
   };
+}
+
+function emptyCustomList() {
+  return { recipeIds: [], shoppingChecked: {}, createdAt: null };
+}
+
+// Custom-list entries only store recipeId — look up the display name from the same
+// sources remergeRecipes() (frontend) treats as authoritative for names: global stock
+// recipes and this namespace's own user recipes. Overlays never carry a name override.
+function resolveRecipeName(allData, ns, recipeId) {
+  const stock = (allData.stockRecipes || []).find(r => r.id === recipeId);
+  if (stock) return stock.name;
+  const user = (ns.userRecipes || []).find(r => r.id === recipeId);
+  return user ? user.name : 'Unknown recipe';
 }
 
 // A session with no heartbeat for this long is considered abandoned — the next heartbeat
@@ -183,6 +198,7 @@ export default {
           plan: ns.plan || [],
           planHistory: ns.planHistory || [],
           shoppingChecked: ns.shoppingChecked || {},
+          customList: ns.customList || emptyCustomList(),
           lastSeenStockTimestamp: ns.lastSeenStockTimestamp || null,
         }));
       } catch (e) {
@@ -209,6 +225,79 @@ export default {
         if (incoming.overlays && typeof incoming.overlays === 'object' && !Array.isArray(incoming.overlays)) ns.overlays = incoming.overlays;
         if (incoming.shoppingChecked && typeof incoming.shoppingChecked === 'object' && !Array.isArray(incoming.shoppingChecked)) ns.shoppingChecked = incoming.shoppingChecked;
         if (typeof incoming.lastSeenStockTimestamp === 'string') ns.lastSeenStockTimestamp = incoming.lastSeenStockTimestamp;
+        allData.namespaces[match.namespace] = ns;
+
+        await putFile(env, JSON.stringify(allData), sha);
+        return corsResponse(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return corsResponse(JSON.stringify({ error: e.message }), 500);
+      }
+    }
+
+    if (pathname === '/custom-list' && method === 'PUT') {
+      const passphrase = request.headers.get('X-Passphrase');
+      const match = PASSPHRASES.find(p => p.phrase === passphrase);
+      if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
+      try {
+        const incoming = JSON.parse(await request.text());
+        if (!Array.isArray(incoming.recipeIds)) {
+          return corsResponse(JSON.stringify({ error: 'Expected recipeIds array' }), 400);
+        }
+        const { allData, sha } = await readAllData(env);
+        const ns = allData.namespaces[match.namespace] || emptyNamespace();
+        const cl = ns.customList || emptyCustomList();
+        cl.recipeIds = incoming.recipeIds;
+        if (incoming.shoppingChecked && typeof incoming.shoppingChecked === 'object' && !Array.isArray(incoming.shoppingChecked)) {
+          cl.shoppingChecked = incoming.shoppingChecked;
+        }
+        cl.createdAt = cl.recipeIds.length ? (cl.createdAt || new Date().toISOString()) : null;
+        ns.customList = cl;
+        allData.namespaces[match.namespace] = ns;
+
+        await putFile(env, JSON.stringify(allData), sha);
+        return corsResponse(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return corsResponse(JSON.stringify({ error: e.message }), 500);
+      }
+    }
+
+    // Freezes recipeIds into named entries (so History still reads fine after a recipe is
+    // renamed or removed later) and files them into the same planHistory array the
+    // fortnightly plan archives into, tagged so the frontend can render them differently.
+    if (pathname === '/custom-list/archive' && method === 'PUT') {
+      const passphrase = request.headers.get('X-Passphrase');
+      const match = PASSPHRASES.find(p => p.phrase === passphrase);
+      if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
+      try {
+        const { allData, sha } = await readAllData(env);
+        const ns = allData.namespaces[match.namespace] || emptyNamespace();
+        const cl = ns.customList || emptyCustomList();
+        if (!cl.recipeIds.length) {
+          return corsResponse(JSON.stringify({ error: 'No active custom list to archive' }), 400);
+        }
+        const entries = cl.recipeIds.map(id => ({ recipeId: id, recipeName: resolveRecipeName(allData, ns, id) }));
+        const savedAt = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        const entry = { type: 'custom', savedAt, entries };
+        if (!ns.planHistory) ns.planHistory = [];
+        ns.planHistory.unshift(entry);
+        ns.customList = emptyCustomList();
+        allData.namespaces[match.namespace] = ns;
+
+        await putFile(env, JSON.stringify(allData), sha);
+        return corsResponse(JSON.stringify({ ok: true, entry }));
+      } catch (e) {
+        return corsResponse(JSON.stringify({ error: e.message }), 500);
+      }
+    }
+
+    if (pathname === '/custom-list/clear' && method === 'PUT') {
+      const passphrase = request.headers.get('X-Passphrase');
+      const match = PASSPHRASES.find(p => p.phrase === passphrase);
+      if (!match) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), 401);
+      try {
+        const { allData, sha } = await readAllData(env);
+        const ns = allData.namespaces[match.namespace] || emptyNamespace();
+        ns.customList = emptyCustomList();
         allData.namespaces[match.namespace] = ns;
 
         await putFile(env, JSON.stringify(allData), sha);
